@@ -1,83 +1,114 @@
 import streamlit as st
 import pandas as pd
 import requests
-import datetime
-import matplotlib.pyplot as plt
+import os
+from datetime import datetime
+from pathlib import Path
 
-st.set_page_config(page_title="釣蝦紀錄", layout="wide")
-
+st.set_page_config(page_title="釣蝦紀錄 App", page_icon="🦐", layout="wide")
 st.title("🦐 釣蝦紀錄 App")
 
-# 初始化 CSV 路徑
-file_path = "shrimp_log.csv"
+# 日期
+date = st.date_input("📅 日期", value=datetime.today())
 
-# 初始化輸入欄位
-with st.form("shrimp_form"):
-    col1, col2 = st.columns(2)
-    with col1:
-        timestamp = st.date_input("日期", datetime.date.today())
-        fishing_time = st.text_input("🎣 座釣時間（如 13:00~17:00）")
-        location = st.text_input("📍 釣蝦場地點")
-        shrimp_type = st.selectbox("🦐 釣蝦類別", ["公蝦", "綜合蝦", "母蝦", "其它"])
-    with col2:
-        bait_formula = st.text_input("🧪 配方")
-        weight = st.number_input("📏 釣獲斤數", min_value=0.0, step=0.1)
-        note = st.text_input("📝 備註")
-        get_weather = st.form_submit_button("☁️ 取得天氣資料")
+# 座釣時間
+start_time = st.time_input("🎣 座釣開始時間")
+end_time = st.time_input("🎣 座釣結束時間")
 
-    # 經緯度輸入（手動）
-    lat = st.text_input("緯度 (Latitude)", "")
-    lon = st.text_input("經度 (Longitude)", "")
+# 座釣時長（手動填寫）
+duration = st.text_input("🕒 座釣時長（例如 3 小時）")
 
-    # 取得天氣資料
-    weather_info = {}
-    if get_weather and lat and lon:
-        api_key = "bfba88273a1a9d6d6530a5073cdf928f"
-        url = f"https://api.openweathermap.org/data/2.5/weather?lat={lat}&lon={lon}&units=metric&lang=zh_tw&appid={api_key}"
-        res = requests.get(url)
+# 場地與類別
+place = st.text_input("📍 釣蝦場地點")
+shrimp_type = st.selectbox("🦐 釣蝦類別", ["公蝦", "綜合蝦", "母蝦", "其它(可自行填寫)"])
+
+# 配方與備註
+bait = st.text_input("🧂 配方")
+note = st.text_input("📝 備註")
+
+# 釣獲量分成斤與兩
+col1, col2 = st.columns(2)
+with col1:
+    jin = st.number_input("🎣 釣獲量（斤）", min_value=0, step=1)
+with col2:
+    liang = st.number_input("🎣 釣獲量（兩）", min_value=0, step=1, max_value=15)
+
+# 自動抓取 GPS
+lat = st.text_input("📍 緯度 (Latitude)")
+lon = st.text_input("📍 經度 (Longitude)")
+if st.button("📍 自動填入GPS位置"):
+    try:
+        res = requests.get("https://ipinfo.io/json")
         if res.status_code == 200:
             data = res.json()
-            weather_info = {
-                "天氣狀況": data["weather"][0]["description"],
-                "溫度（°C）": data["main"]["temp"],
-                "濕度（%）": data["main"]["humidity"],
-                "氣壓（hPa）": data["main"]["pressure"]
-            }
-            st.success("✅ 成功取得天氣資料")
+            loc = data["loc"].split(",")
+            lat = loc[0]
+            lon = loc[1]
+            st.success(f"取得位置成功：{lat}, {lon}")
         else:
-            st.error("❌ 天氣資料取得失敗，請檢查 API Key 或經緯度")
+            st.warning("無法取得 GPS 資訊")
+    except Exception as e:
+        st.error(f"發生錯誤：{e}")
 
-    submitted = st.form_submit_button("✅ 儲存紀錄")
-    if submitted:
-        new_data = {
-            "時間": timestamp,
-            "座釣時間": fishing_time,
-            "地點": location,
-            "釣蝦類別": shrimp_type,
-            "配方": bait_formula,
-            "斤數": weight,
-            "備註": note
-        }
-        new_data.update(weather_info)
-        df_new = pd.DataFrame([new_data])
-        df_new.to_csv(file_path, mode='a', index=False, header=not Path(file_path).exists())
-        st.success("✅ 已儲存紀錄")
+# 抓取天氣資料（含氣壓）
+weather_info = {}
+def get_weather(lat, lon):
+    url = (
+        f"https://api.open-meteo.com/v1/forecast?"
+        f"latitude={lat}&longitude={lon}&current="
+        f"temperature_2m,relative_humidity_2m,precipitation,pressure_msl&timezone=auto"
+    )
+    try:
+        res = requests.get(url)
+        if res.status_code == 200:
+            current = res.json().get("current", {})
+            return {
+                "氣溫": f"{current.get('temperature_2m')}°C",
+                "濕度": f"{current.get('relative_humidity_2m')}%",
+                "降雨": f"{current.get('precipitation')} mm",
+                "氣壓": f"{current.get('pressure_msl')} hPa"
+            }
+    except:
+        return {}
+    return {}
 
-# 顯示紀錄與圖表
-st.markdown("---")
-st.header("📊 所有釣蝦紀錄")
-try:
-    df_all = pd.read_csv(file_path)
-    st.dataframe(df_all, use_container_width=True)
+if lat and lon:
+    weather_info = get_weather(lat, lon)
+    if weather_info:
+        st.info("🌤️ 天氣資訊：" + ", ".join([f"{k}: {v}" for k, v in weather_info.items()]))
+    else:
+        st.warning("⚠️ 無法取得天氣資料")
 
-    if "斤數" in df_all.columns:
-        df_all["時間"] = pd.to_datetime(df_all["時間"])
-        df_grouped = df_all.groupby(df_all["時間"].dt.date)["斤數"].sum().reset_index()
-        plt.figure(figsize=(10, 4))
-        plt.plot(df_grouped["時間"], df_grouped["斤數"], marker="o")
-        plt.title("每日釣獲斤數趨勢")
-        plt.xlabel("日期")
-        plt.ylabel("斤數")
-        st.pyplot(plt)
-except Exception as e:
-    st.warning(f"⚠️ 無法讀取紀錄檔：{e}")
+# 儲存資料
+def save_record():
+    file_path = "shrimp_log.csv"
+    record = {
+        "日期": date.strftime("%Y/%m/%d"),
+        "開始時間": start_time.strftime("%H:%M"),
+        "結束時間": end_time.strftime("%H:%M"),
+        "時長": duration,
+        "釣蝦場地": place,
+        "釣蝦類別": shrimp_type,
+        "配方": bait,
+        "釣獲量_斤": jin,
+        "釣獲量_兩": liang,
+        "備註": note,
+        "緯度": lat,
+        "經度": lon,
+        **weather_info
+    }
+    df = pd.DataFrame([record])
+    if os.path.exists(file_path):
+        df.to_csv(file_path, mode='a', header=False, index=False)
+    else:
+        df.to_csv(file_path, index=False)
+
+if st.button("💾 儲存紀錄"):
+    save_record()
+    st.success("✅ 已儲存紀錄！")
+
+# 顯示歷史紀錄
+if Path("shrimp_log.csv").exists():
+    st.markdown("## 📊 所有釣蝦紀錄")
+    df = pd.read_csv("shrimp_log.csv")
+    st.dataframe(df)
